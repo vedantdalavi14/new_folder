@@ -34,6 +34,8 @@ interface P2PFileSenderProps {
 type ConnectionState = 'idle' | 'waiting' | 'connecting' | 'connected' | 'transferring' | 'completed' | 'error';
 
 export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2PFileSenderProps) {
+  console.log('🚀 P2PFileSender initialized', { initialRoomId, isReceiver });
+  
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -48,7 +50,10 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   const [peerCount, setPeerCount] = useState(0);
   
   // WebRTC and Socket management
-  const [webrtcManager] = useState(() => new WebRTCManager());
+  const [webrtcManager] = useState(() => {
+    console.log('📡 WebRTC Manager created');
+    return new WebRTCManager();
+  });
   const [peerId, setPeerId] = useState<string>('');
 
   useEffect(() => {
@@ -63,6 +68,11 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   }, [initialRoomId, isReceiver]);
 
   const handleFileSelect = useCallback((file: File) => {
+    console.log('📄 File selected:', { 
+      name: file.name, 
+      size: file.size, 
+      type: file.type 
+    });
     setSelectedFile(file);
     setError('');
   }, []);
@@ -83,21 +93,27 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   }, [handleFileSelect]);
 
   const createRoom = async () => {
+    console.log('🏠 Creating new room...');
     try {
       const response = await apiRequest('POST', '/api/rooms');
       const room = await response.json();
+      console.log('✅ Room created:', room.id);
       setRoomId(room.id);
       
       const currentDomain = window.location.origin;
       const link = `${currentDomain}/room/${room.id}`;
       setShareableLink(link);
+      console.log('🔗 Share link generated:', link);
       
       // Connect to signaling server and join room
+      console.log('🔌 Connecting to signaling server...');
       const socket = socketManager.connect();
       socket.emit('join-room', room.id);
+      console.log('🚪 Joined room as sender:', room.id);
       
       setupSocketListeners();
       setConnectionState('waiting');
+      console.log('⏳ Waiting for receiver to join...');
       
       toast({
         title: "Room Created",
@@ -106,6 +122,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       
       return room.id;
     } catch (error) {
+      console.error('❌ Failed to create room:', error);
       setError('Failed to create room');
       toast({
         title: "Error",
