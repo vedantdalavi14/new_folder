@@ -133,20 +133,25 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   };
 
   const joinRoom = async (roomIdToJoin: string) => {
+    console.log('🚪 Attempting to join room:', roomIdToJoin);
     try {
       const response = await apiRequest('GET', `/api/rooms/${roomIdToJoin}`);
       if (!response.ok) {
         throw new Error('Room not found');
       }
+      console.log('✅ Room exists, joining as receiver');
       
       setRoomId(roomIdToJoin);
       setConnectionState('connecting');
       
       // Connect to signaling server and join room
+      console.log('🔌 Connecting to signaling server as receiver...');
       const socket = socketManager.connect();
       socket.emit('join-room', roomIdToJoin);
+      console.log('📡 Emitted join-room event for:', roomIdToJoin);
       
       setupSocketListeners();
+      console.log('👂 Socket listeners set up for receiver');
       
       toast({
         title: "Joined Room",
@@ -154,6 +159,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       });
       
     } catch (error) {
+      console.error('❌ Failed to join room:', error);
       setError('Failed to join room');
       setConnectionState('error');
       toast({
@@ -165,15 +171,21 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   };
 
   const setupSocketListeners = () => {
+    console.log('👂 Setting up socket listeners...');
     const socket = socketManager.getSocket();
-    if (!socket) return;
+    if (!socket) {
+      console.error('❌ No socket available for listeners');
+      return;
+    }
 
     socket.on('peer-joined', async (joinedPeerId: string) => {
-      console.log('Peer joined:', joinedPeerId);
+      console.log('👋 Peer joined room:', joinedPeerId);
       setPeerId(joinedPeerId);
       
       // Setup ICE candidate handler with the known peer ID
+      console.log('🧊 Setting up ICE candidate handler for peer:', joinedPeerId);
       webrtcManager.onIceCandidate((candidate) => {
+        console.log('🧊 Sending ICE candidate to peer:', joinedPeerId);
         socket.emit('webrtc-ice-candidate', {
           roomId,
           candidate: candidate.toJSON(),
@@ -183,30 +195,38 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       
       if (!isReceiver) {
         // Sender creates offer
+        console.log('📤 Sender creating WebRTC offer for peer:', joinedPeerId);
         try {
           webrtcManager.createDataChannel();
+          console.log('📺 Data channel created');
           const offer = await webrtcManager.createOffer();
+          console.log('📨 WebRTC offer created, sending to peer');
           socket.emit('webrtc-offer', {
             roomId,
             offer,
             targetId: joinedPeerId
           });
           setConnectionState('connecting');
+          console.log('🔄 Connection state set to connecting');
         } catch (error) {
-          console.error('Error creating offer:', error);
+          console.error('❌ Error creating offer:', error);
           setError('Failed to establish connection');
         }
       }
     });
 
     socket.on('room-participants', (participants: string[]) => {
+      console.log('📊 Room participants updated:', participants.length);
       setPeerCount(participants.length);
       if (participants.length > 0 && isReceiver) {
         const targetPeerId = participants[0];
+        console.log('🎯 Receiver identified sender peer:', targetPeerId);
         setPeerId(targetPeerId);
         
         // Setup ICE candidate handler for receiver
+        console.log('🧊 Setting up ICE candidate handler for receiver');
         webrtcManager.onIceCandidate((candidate) => {
+          console.log('🧊 Receiver sending ICE candidate to sender:', targetPeerId);
           socket.emit('webrtc-ice-candidate', {
             roomId,
             candidate: candidate.toJSON(),
@@ -217,9 +237,11 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
     });
 
     socket.on('webrtc-offer', async (data: { offer: RTCSessionDescriptionInit; fromId: string }) => {
-      console.log('Received WebRTC offer from:', data.fromId);
+      console.log('📥 Received WebRTC offer from sender:', data.fromId);
       try {
+        console.log('🔄 Processing offer and creating answer...');
         const answer = await webrtcManager.createAnswer(data.offer);
+        console.log('📤 Sending WebRTC answer back to sender');
         socket.emit('webrtc-answer', {
           roomId,
           answer,
@@ -227,40 +249,44 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
         });
         
         webrtcManager.onDataChannel((channel) => {
-          console.log('Data channel received');
+          console.log('📺 Data channel established on receiver side');
           setConnectionState('connected');
         });
         
       } catch (error) {
-        console.error('Error handling offer:', error);
+        console.error('❌ Error handling WebRTC offer:', error);
         setError('Failed to establish connection');
       }
     });
 
     socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit; fromId: string }) => {
-      console.log('Received WebRTC answer from:', data.fromId);
+      console.log('📥 Received WebRTC answer from receiver:', data.fromId);
       try {
+        console.log('🔄 Processing answer and finalizing connection...');
         await webrtcManager.handleAnswer(data.answer);
+        console.log('✅ WebRTC connection established successfully');
         setConnectionState('connected');
       } catch (error) {
-        console.error('Error handling answer:', error);
+        console.error('❌ Error handling WebRTC answer:', error);
         setError('Failed to establish connection');
       }
     });
 
     socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit; fromId: string }) => {
-      console.log('Received ICE candidate from:', data.fromId);
+      console.log('🧊 Received ICE candidate from peer:', data.fromId);
       try {
         await webrtcManager.addIceCandidate(data.candidate);
+        console.log('✅ ICE candidate added successfully');
       } catch (error) {
-        console.error('Error adding ICE candidate:', error);
+        console.error('❌ Error adding ICE candidate:', error);
       }
     });
 
     socket.on('peer-left', (leftPeerId: string) => {
-      console.log('Peer left:', leftPeerId);
+      console.log('👋 Peer left the room:', leftPeerId);
       setPeerCount(prev => Math.max(0, prev - 1));
       if (leftPeerId === peerId) {
+        console.log('💔 Our connected peer left, resetting connection');
         setConnectionState('idle');
         setPeerId('');
       }
@@ -268,6 +294,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
 
     // WebRTC progress and file handling
     webrtcManager.onProgress((progress) => {
+      console.log('📈 Transfer progress:', `${progress.percentage.toFixed(1)}%`, `${formatBytes(progress.bytesTransferred)}/${formatBytes(progress.fileSize)}`);
       setTransferProgress(progress);
       if (progress.percentage < 100) {
         setConnectionState('transferring');
@@ -275,6 +302,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
     });
 
     webrtcManager.onFileReceived((blob, fileName) => {
+      console.log('📦 File received successfully:', fileName, 'Size:', formatBytes(blob.size));
       setConnectionState('completed');
       downloadFile(blob, fileName);
       
@@ -285,10 +313,12 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
     });
 
     webrtcManager.onConnectionStateChange((state) => {
-      console.log('WebRTC connection state:', state);
+      console.log('🔗 WebRTC connection state changed:', state);
       if (state === 'connected' && connectionState !== 'transferring') {
+        console.log('✅ P2P connection fully established and ready for transfer');
         setConnectionState('connected');
       } else if (state === 'failed' || state === 'disconnected') {
+        console.log('💔 WebRTC connection failed or disconnected');
         setConnectionState('error');
         setError('Connection lost');
       }
@@ -332,16 +362,20 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
 
   const sendFile = async () => {
     if (!selectedFile || webrtcManager.getConnectionState() !== 'connected') {
+      console.log('❌ Cannot send file - no file selected or not connected');
       return;
     }
 
+    console.log('📤 Starting file transfer:', selectedFile.name);
     try {
       setConnectionState('transferring');
+      console.log('🚀 Initiating file send via WebRTC data channel');
       await webrtcManager.sendFile(selectedFile);
       
       // Wait for transfer to complete
       setTimeout(() => {
         if (transferProgress?.percentage === 100) {
+          console.log('✅ File transfer completed successfully');
           setConnectionState('completed');
           toast({
             title: "Transfer Complete",
@@ -351,6 +385,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       }, 1000);
       
     } catch (error) {
+      console.error('❌ File transfer failed:', error);
       setError('Failed to transfer file');
       setConnectionState('error');
       toast({
