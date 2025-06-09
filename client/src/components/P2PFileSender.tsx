@@ -155,6 +155,15 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       console.log('Peer joined:', joinedPeerId);
       setPeerId(joinedPeerId);
       
+      // Setup ICE candidate handler with the known peer ID
+      webrtcManager.onIceCandidate((candidate) => {
+        socket.emit('webrtc-ice-candidate', {
+          roomId,
+          candidate: candidate.toJSON(),
+          targetId: joinedPeerId
+        });
+      });
+      
       if (!isReceiver) {
         // Sender creates offer
         try {
@@ -176,7 +185,17 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
     socket.on('room-participants', (participants: string[]) => {
       setPeerCount(participants.length);
       if (participants.length > 0 && isReceiver) {
-        setPeerId(participants[0]);
+        const targetPeerId = participants[0];
+        setPeerId(targetPeerId);
+        
+        // Setup ICE candidate handler for receiver
+        webrtcManager.onIceCandidate((candidate) => {
+          socket.emit('webrtc-ice-candidate', {
+            roomId,
+            candidate: candidate.toJSON(),
+            targetId: targetPeerId
+          });
+        });
       }
     });
 
@@ -230,15 +249,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
       }
     });
 
-    // Setup WebRTC event handlers
-    webrtcManager.onIceCandidate((candidate) => {
-      socket.emit('webrtc-ice-candidate', {
-        roomId,
-        candidate: candidate.toJSON(),
-        targetId: peerId
-      });
-    });
-
+    // WebRTC progress and file handling
     webrtcManager.onProgress((progress) => {
       setTransferProgress(progress);
       if (progress.percentage < 100) {
