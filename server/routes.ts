@@ -96,7 +96,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log("Client disconnected:", socket.id);
       
       // Remove from all rooms
-      for (const [roomId, clients] of activeRooms.entries()) {
+      for (const [roomId, clients] of Array.from(activeRooms.entries())) {
         if (clients.has(socket.id)) {
           clients.delete(socket.id);
           socket.to(roomId).emit("peer-left", socket.id);

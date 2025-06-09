@@ -21,7 +21,7 @@ import {
   ChevronUp,
   QrCode
 } from 'lucide-react';
-import QRCode from 'qrcode.react';
+import { QRCodeSVG } from 'qrcode.react';
 import { socketManager } from '@/lib/socket';
 import { WebRTCManager, FileTransferProgress } from '@/lib/webrtc';
 import { apiRequest } from '@/lib/queryClient';
@@ -710,7 +710,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
               <div className="text-center">
                 <label className="block text-sm font-medium text-gray-700 mb-2">QR Code</label>
                 <div className="inline-block p-4 bg-white border border-gray-200 rounded-lg">
-                  <QRCode value={shareableLink} size={128} />
+                  <QRCodeSVG value={shareableLink} size={128} />
                 </div>
                 <p className="text-xs text-gray-500 mt-2">Scan to open link</p>
               </div>
