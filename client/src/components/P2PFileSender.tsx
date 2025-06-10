@@ -66,14 +66,16 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
 
     // Setup file received handler
     webrtcManager.onFileReceived((file, fileName) => {
-      console.log(`✅ File received: ${fileName}`, file);
-      toast({
-        title: "File Received",
-        description: `${fileName} has been successfully downloaded.`,
-      });
-      setConnectionState('completed');
-      setReceivedFile({ blob: file, name: fileName });
-      downloadFile(file, fileName);
+      if (file) {
+        console.log(`✅ File received: ${fileName}`, file);
+        toast({
+          title: "File Received",
+          description: `${fileName} has been successfully downloaded.`,
+        });
+        setConnectionState('completed');
+        setReceivedFile({ blob: file, name: fileName });
+        downloadFile(file, fileName);
+      }
     });
 
     if (initialRoomId && isReceiver) {
@@ -837,7 +839,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
               {/* Progress Bar */}
               <div>
                 <div className="flex justify-between text-sm text-gray-600 mb-2">
-                  <span>Sending {transferProgress.fileName}</span>
+                  <span className="break-all">Sending {transferProgress.fileName}</span>
                   <span>{Math.round(transferProgress.percentage)}%</span>
                 </div>
                 <Progress value={transferProgress.percentage} />

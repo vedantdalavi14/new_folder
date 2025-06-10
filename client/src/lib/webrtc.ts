@@ -34,10 +34,14 @@ export class WebRTCManager {
   private lastProgressTime = 0;
   private lastProgressBytes = 0;
   private fileReconstructionTriggered = false;
+  private lastReceiverProgressUpdateTime = 0;
+  private sentFile: File | null = null;
+  private missingChunkRetries = 0;
+  private readonly MAX_RETRIES = 5;
 
   // Optimization properties
   private readonly MAX_PARALLEL_CHANNELS = 4;
-  private readonly CHUNK_SIZE = 64 * 1024; // 64KB
+  private readonly CHUNK_SIZE = 260000; // Just under the 256KB limit to allow for headers
 
   constructor() {
     this.setupPeerConnection();
@@ -48,7 +52,12 @@ export class WebRTCManager {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
       ],
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
     });
 
     this.peerConnection.onconnectionstatechange = () => {
@@ -124,6 +133,7 @@ export class WebRTCManager {
   }
 
   async sendFile(file: File) {
+    this.sentFile = file;
     await Promise.all(this.activeChannels.map(channel => {
         if (channel.readyState === 'open') return Promise.resolve();
         return new Promise<void>(resolve => channel.onopen = () => resolve());
@@ -146,10 +156,11 @@ export class WebRTCManager {
     await this.sendWithBackpressure(this.activeChannels[0], JSON.stringify(metadata));
 
     this.transferStartTime = Date.now();
-    this.lastProgressTime = this.transferStartTime;
+    this.lastProgressTime = Date.now();
     this.lastProgressBytes = 0;
 
     let channelIndex = 0;
+    let lastProgressUpdateTime = 0;
     for (let i = 0; i < totalChunks; i++) {
         const channel = this.activeChannels[channelIndex];
 
@@ -157,20 +168,21 @@ export class WebRTCManager {
         const end = Math.min(start + this.CHUNK_SIZE, file.size);
         const chunkData = await file.slice(start, end).arrayBuffer();
 
-        const chunkMeta = JSON.stringify({ index: i });
-        const metaBytes = new TextEncoder().encode(chunkMeta);
+        const packet = this.createPacket(i, chunkData);
         
-        const packet = new Uint8Array(4 + metaBytes.length + chunkData.byteLength);
-        new DataView(packet.buffer).setUint32(0, metaBytes.length, true);
-        packet.set(metaBytes, 4);
-        packet.set(new Uint8Array(chunkData), 4 + metaBytes.length);
-
-        await this.sendWithBackpressure(channel, packet.buffer);
+        await this.sendWithBackpressure(channel, packet);
         
-        this.updateProgress(file.name, file.size, end);
+        const now = Date.now();
+        if (now - lastProgressUpdateTime > 100) { // Throttle updates
+            this.updateProgress(file.name, file.size, end);
+            lastProgressUpdateTime = now;
+        }
         
         channelIndex = (channelIndex + 1) % this.activeChannels.length;
     }
+
+    // Final progress update
+    this.updateProgress(file.name, file.size, file.size);
 
     // Wait for all channel buffers to drain before sending completion
     const waitForDraining = () => {
@@ -187,7 +199,25 @@ export class WebRTCManager {
     };
 
     await waitForDraining();
-    this.activeChannels[0].send(JSON.stringify({ type: 'file-complete' }));
+    await this.sendWithBackpressure(this.activeChannels[0], JSON.stringify({ type: 'file-complete' }));
+  }
+
+  private createPacket(index: number, data: ArrayBuffer): ArrayBuffer {
+    // 3-byte header: [index (2 bytes), checksum (1 byte)]
+    const header = new ArrayBuffer(3);
+    const headerView = new DataView(header);
+    headerView.setUint16(0, index, true); // Little-endian for wide compatibility
+    headerView.setUint8(2, this.quickChecksum(data));
+
+    const packet = new Uint8Array(3 + data.byteLength);
+    packet.set(new Uint8Array(header));
+    packet.set(new Uint8Array(data), 3);
+    return packet.buffer;
+  }
+
+  private quickChecksum(data: ArrayBuffer): number {
+    // Fast 8-bit XOR checksum
+    return new Uint8Array(data).reduce((sum, byte) => sum ^ byte, 0);
   }
 
   private async sendWithBackpressure(channel: RTCDataChannel, data: string | ArrayBuffer) {
@@ -237,22 +267,35 @@ export class WebRTCManager {
           this.currentFileType = message.fileType;
           this.transferStartTime = Date.now();
           this.fileReconstructionTriggered = false;
+          this.missingChunkRetries = 0;
         } else if (message.type === 'file-complete') {
           this.reconstructAndDownloadFile();
+        } else if (message.type === 'request-missing-chunks') {
+          this.resendChunks(message.indices);
         }
       } else if (data instanceof ArrayBuffer) {
-        const view = new DataView(data);
-        const metaLength = view.getUint32(0, true);
-        const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, metaLength)));
-        const chunkData = data.slice(4 + metaLength);
+        // Binary packet: [index (2 bytes), checksum (1 byte), ...chunkData]
+        const headerView = new DataView(data, 0, 3);
+        const index = headerView.getUint16(0, true);
+        const checksum = headerView.getUint8(2);
+        const chunkData = data.slice(3);
 
-        this.receivedChunks.set(meta.index, chunkData);
+        if (this.quickChecksum(chunkData) === checksum) {
+            this.receivedChunks.set(index, chunkData);
         
-        const bytesReceived = Array.from(this.receivedChunks.values()).reduce((sum, chunk) => sum + chunk.byteLength, 0);
-        this.updateProgress(this.currentFileName, this.currentFileSize, bytesReceived);
+            const bytesReceived = Array.from(this.receivedChunks.values()).reduce((sum, chunk) => sum + chunk.byteLength, 0);
+            
+            const now = Date.now();
+            if (now - this.lastReceiverProgressUpdateTime > 100) {
+                this.updateProgress(this.currentFileName, this.currentFileSize, bytesReceived);
+                this.lastReceiverProgressUpdateTime = now;
+            }
 
-        if (this.receivedChunks.size === this.expectedChunks) {
-          this.reconstructAndDownloadFile();
+            if (this.receivedChunks.size === this.expectedChunks) {
+              this.reconstructAndDownloadFile();
+            }
+        } else {
+            console.warn(`Checksum mismatch for chunk ${index}. Packet discarded.`);
         }
       }
     } catch (error) {
@@ -260,16 +303,59 @@ export class WebRTCManager {
     }
   }
 
+  private async resendChunks(indices: number[]) {
+    if (!this.sentFile) {
+        console.error("No file available for resending chunks.");
+        return;
+    }
+    console.log(`Resending ${indices.length} chunks.`);
+
+    for (const index of indices) {
+        const start = index * this.CHUNK_SIZE;
+        const end = Math.min(start + this.CHUNK_SIZE, this.sentFile.size);
+        const chunkData = await this.sentFile.slice(start, end).arrayBuffer();
+        const packet = this.createPacket(index, chunkData);
+        // Resend on the primary channel for simplicity
+        await this.sendWithBackpressure(this.activeChannels[0], packet);
+    }
+  }
+
   private reconstructAndDownloadFile() {
     if (this.fileReconstructionTriggered) return;
-    this.fileReconstructionTriggered = true;
 
     if (this.receivedChunks.size !== this.expectedChunks) {
-      console.warn(`File reconstruction failed. Expected ${this.expectedChunks}, got ${this.receivedChunks.size}`);
-      return;
+        if (this.missingChunkRetries < this.MAX_RETRIES) {
+            this.missingChunkRetries++;
+            const missingIndices: number[] = [];
+            for (let i = 0; i < this.expectedChunks; i++) {
+                if (!this.receivedChunks.has(i)) {
+                    missingIndices.push(i);
+                }
+            }
+            // Only request if there are indeed missing chunks
+            if (missingIndices.length > 0) {
+                console.warn(`Requesting ${missingIndices.length} missing chunks, attempt ${this.missingChunkRetries}`);
+                this.activeChannels[0].send(JSON.stringify({
+                    type: 'request-missing-chunks',
+                    indices: missingIndices
+                }));
+            }
+        } else {
+            console.error(`File reconstruction failed after ${this.MAX_RETRIES} retries. Missing ${this.expectedChunks - this.receivedChunks.size} chunks.`);
+        }
+        return;
     }
+    
+    this.fileReconstructionTriggered = true;
 
-    const chunks = Array.from(this.receivedChunks.entries()).sort((a, b) => a[0] - b[0]).map(entry => entry[1]);
+    this.updateProgress(this.currentFileName, this.currentFileSize, this.currentFileSize);
+    
+    // Pre-allocate array and fill it in order for performance
+    const chunks = new Array(this.expectedChunks);
+    for (let i = 0; i < this.expectedChunks; i++) {
+        chunks[i] = this.receivedChunks.get(i);
+    }
+    
     const blob = new Blob(chunks, { type: this.currentFileType });
     this.onFileReceivedCallback?.(blob, this.currentFileName);
   }
