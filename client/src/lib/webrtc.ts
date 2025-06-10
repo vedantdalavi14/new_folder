@@ -33,6 +33,7 @@ export class WebRTCManager {
   private transferStartTime = 0;
   private lastProgressTime = 0;
   private lastProgressBytes = 0;
+  private fileReconstructionTriggered = false;
 
   // Optimization properties
   private readonly MAX_PARALLEL_CHANNELS = 4;
@@ -171,6 +172,21 @@ export class WebRTCManager {
         channelIndex = (channelIndex + 1) % this.activeChannels.length;
     }
 
+    // Wait for all channel buffers to drain before sending completion
+    const waitForDraining = () => {
+      return new Promise<void>(resolve => {
+        const check = () => {
+          if (this.activeChannels.every(c => c.bufferedAmount === 0)) {
+            resolve();
+          } else {
+            setTimeout(check, 100);
+          }
+        };
+        check();
+      });
+    };
+
+    await waitForDraining();
     this.activeChannels[0].send(JSON.stringify({ type: 'file-complete' }));
   }
 
@@ -220,6 +236,7 @@ export class WebRTCManager {
           this.currentFileSize = message.fileSize;
           this.currentFileType = message.fileType;
           this.transferStartTime = Date.now();
+          this.fileReconstructionTriggered = false;
         } else if (message.type === 'file-complete') {
           this.reconstructAndDownloadFile();
         }
@@ -233,6 +250,10 @@ export class WebRTCManager {
         
         const bytesReceived = Array.from(this.receivedChunks.values()).reduce((sum, chunk) => sum + chunk.byteLength, 0);
         this.updateProgress(this.currentFileName, this.currentFileSize, bytesReceived);
+
+        if (this.receivedChunks.size === this.expectedChunks) {
+          this.reconstructAndDownloadFile();
+        }
       }
     } catch (error) {
       console.error('Error processing message:', error);
@@ -240,6 +261,9 @@ export class WebRTCManager {
   }
 
   private reconstructAndDownloadFile() {
+    if (this.fileReconstructionTriggered) return;
+    this.fileReconstructionTriggered = true;
+
     if (this.receivedChunks.size !== this.expectedChunks) {
       console.warn(`File reconstruction failed. Expected ${this.expectedChunks}, got ${this.receivedChunks.size}`);
       return;

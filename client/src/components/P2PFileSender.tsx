@@ -565,8 +565,8 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
                 <>
                   {/* File Info */}
                   <div className="flex items-center p-4 bg-blue-50 border border-blue-100 rounded-lg mb-4">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-800">{transferProgress.fileName}</p>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-800 break-all">{transferProgress.fileName}</p>
                       <p className="text-sm text-gray-500">
                         {formatBytes(transferProgress.fileSize)} • {transferProgress.fileName.split('.').pop()?.toUpperCase()} Document
                       </p>
@@ -679,14 +679,14 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
           {/* Selected File Display */}
           {selectedFile && (
             <div className="mt-4 p-4 bg-gray-50 rounded-lg flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="w-8 h-8 bg-primary rounded flex items-center justify-center mr-3">
+              <div className="flex items-center min-w-0">
+                <div className="w-8 h-8 bg-primary rounded flex items-center justify-center mr-3 flex-shrink-0">
                   <span className="text-white text-xs font-medium">
                     {selectedFile.name.split('.').pop()?.substring(0, 2).toUpperCase()}
                   </span>
                 </div>
-                <div>
-                  <p className="font-medium text-gray-800">{selectedFile.name}</p>
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 break-all">{selectedFile.name}</p>
                   <p className="text-sm text-gray-500">{formatBytes(selectedFile.size)}</p>
                 </div>
               </div>
@@ -930,7 +930,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
           <CardContent className="pt-6 text-center">
             <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
             <h2 className="text-xl font-semibold text-gray-800 mb-2">Transfer Complete!</h2>
-            <p className="text-gray-600 mb-4">
+            <p className="text-gray-600 mb-4 break-all">
               <span className="font-medium">{selectedFile?.name}</span> was sent successfully.
             </p>
             <Button onClick={() => {
