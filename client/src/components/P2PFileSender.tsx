@@ -34,8 +34,6 @@ interface P2PFileSenderProps {
 type ConnectionState = 'idle' | 'waiting' | 'connecting' | 'connected' | 'transferring' | 'completed' | 'error';
 
 export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2PFileSenderProps) {
-  console.log('🚀 P2PFileSender initialized', { initialRoomId, isReceiver });
-  
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -48,6 +46,7 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   const [error, setError] = useState<string>('');
   const [showTechnicalInfo, setShowTechnicalInfo] = useState(false);
   const [peerCount, setPeerCount] = useState(0);
+  const [receivedFile, setReceivedFile] = useState<{ blob: Blob; name: string } | null>(null);
   
   // WebRTC and Socket management
   const [webrtcManager] = useState(() => {
@@ -57,6 +56,26 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   const [peerId, setPeerId] = useState<string>('');
 
   useEffect(() => {
+    console.log('🚀 P2PFileSender initialized', { initialRoomId, isReceiver });
+    
+    webrtcManager.onProgress(setTransferProgress);
+    webrtcManager.onConnectionStateChange((state) => {
+      if (state === 'connected') setConnectionState('connected');
+      if (state === 'disconnected' || state === 'failed') setConnectionState('error');
+    });
+
+    // Setup file received handler
+    webrtcManager.onFileReceived((file, fileName) => {
+      console.log(`✅ File received: ${fileName}`, file);
+      toast({
+        title: "File Received",
+        description: `${fileName} has been successfully downloaded.`,
+      });
+      setConnectionState('completed');
+      setReceivedFile({ blob: file, name: fileName });
+      downloadFile(file, fileName);
+    });
+
     if (initialRoomId && isReceiver) {
       joinRoom(initialRoomId);
     }
@@ -197,8 +216,8 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
         // Sender creates offer
         console.log('📤 Sender creating WebRTC offer for peer:', joinedPeerId);
         try {
-          webrtcManager.createDataChannel();
-          console.log('📺 Data channel created');
+          webrtcManager.createDataChannels();
+          console.log('📺 Data channels created');
           const offer = await webrtcManager.createOffer();
           console.log('📨 WebRTC offer created, sending to peer');
           socket.emit('webrtc-offer', {
@@ -291,38 +310,6 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
         setPeerId('');
       }
     });
-
-    // WebRTC progress and file handling
-    webrtcManager.onProgress((progress) => {
-      console.log('📈 Transfer progress:', `${progress.percentage.toFixed(1)}%`, `${formatBytes(progress.bytesTransferred)}/${formatBytes(progress.fileSize)}`);
-      setTransferProgress(progress);
-      if (progress.percentage < 100) {
-        setConnectionState('transferring');
-      }
-    });
-
-    webrtcManager.onFileReceived((blob, fileName) => {
-      console.log('📦 File received successfully:', fileName, 'Size:', formatBytes(blob.size));
-      setConnectionState('completed');
-      downloadFile(blob, fileName);
-      
-      toast({
-        title: "File Received",
-        description: `${fileName} has been downloaded`,
-      });
-    });
-
-    webrtcManager.onConnectionStateChange((state) => {
-      console.log('🔗 WebRTC connection state changed:', state);
-      if (state === 'connected' && connectionState !== 'transferring') {
-        console.log('✅ P2P connection fully established and ready for transfer');
-        setConnectionState('connected');
-      } else if (state === 'failed' || state === 'disconnected') {
-        console.log('💔 WebRTC connection failed or disconnected');
-        setConnectionState('error');
-        setError('Connection lost');
-      }
-    });
   };
 
   const handleSendFile = async () => {
@@ -361,36 +348,20 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
   };
 
   const sendFile = async () => {
-    if (!selectedFile || webrtcManager.getConnectionState() !== 'connected') {
-      console.log('❌ Cannot send file - no file selected or not connected');
-      return;
-    }
-
-    console.log('📤 Starting file transfer:', selectedFile.name);
+    if (!selectedFile || !webrtcManager) return;
+    console.log('🚀 Initiating file send via WebRTC data channel');
+    setConnectionState('transferring');
     try {
-      setConnectionState('transferring');
-      console.log('🚀 Initiating file send via WebRTC data channel');
       await webrtcManager.sendFile(selectedFile);
-      
-      // Wait for transfer to complete
-      setTimeout(() => {
-        if (transferProgress?.percentage === 100) {
-          console.log('✅ File transfer completed successfully');
-          setConnectionState('completed');
-          toast({
-            title: "Transfer Complete",
-            description: `${selectedFile.name} has been sent successfully`,
-          });
-        }
-      }, 1000);
-      
-    } catch (error) {
-      console.error('❌ File transfer failed:', error);
-      setError('Failed to transfer file');
+      console.log('✅ File send process completed on sender side');
+      setConnectionState('completed');
+    } catch (err: any) {
+      console.error('❌ File transfer failed:', err);
+      setError(`File transfer failed: ${err.message}`);
       setConnectionState('error');
       toast({
-        title: "Transfer Failed",
-        description: "Failed to transfer file",
+        title: "Transfer Error",
+        description: err.message,
         variant: "destructive"
       });
     }
@@ -639,9 +610,9 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
               <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-gray-800 mb-2">Transfer Complete!</h3>
               <p className="text-gray-600 mb-4">Your file has been downloaded successfully</p>
-              <Button onClick={() => window.open('', '_blank')}>
-                <FolderOpen className="mr-2 h-4 w-4" />
-                Open Downloads
+              <Button onClick={() => receivedFile && downloadFile(receivedFile.blob, receivedFile.name)}>
+                <Download className="mr-2 h-4 w-4" />
+                Download Again
               </Button>
             </CardContent>
           </Card>
@@ -952,6 +923,28 @@ export function P2PFileSender({ roomId: initialRoomId, isReceiver = false }: P2P
           )}
         </CardContent>
       </Card>
+
+      {/* Transfer complete for sender */}
+      {connectionState === 'completed' && !isReceiver && (
+        <Card className="mb-6">
+          <CardContent className="pt-6 text-center">
+            <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-gray-800 mb-2">Transfer Complete!</h2>
+            <p className="text-gray-600 mb-4">
+              <span className="font-medium">{selectedFile?.name}</span> was sent successfully.
+            </p>
+            <Button onClick={() => {
+              setSelectedFile(null);
+              setConnectionState('idle');
+              setShareableLink('');
+              setTransferProgress(null);
+            }}>
+              <Upload className="mr-2 h-4 w-4" />
+              Send Another File
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
